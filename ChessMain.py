@@ -159,6 +159,7 @@ sliderDragging = False
 sidebarQuitHover = False  # hover state for sidebar quit button
 # End-game screen hover state: 0=none, 1=playAgain, 2=quit
 endGameHover = 0
+gameTerminated = False  # True when user quits via sidebar button
 
 def loadImages():
     pieces = [
@@ -219,8 +220,16 @@ def main():
                         continue
                     # Handle clicks in sidebar area
                     if col >= DIMENSION:
+                        # Check if sidebar quit button was clicked
                         if handleSidebarQuitClick(location):
-                            running = False
+                            global gameTerminated
+                            gameTerminated = True
+                            gs.checkmate = False
+                            gs.stalemate = False
+                            gs.draw = True
+                            gs.drawThreefold = False
+                            gs.drawFiftyMove = False
+                            gs.drawInsufficient = False
                         continue
 
                     if sqSelected == (row, col):  # the user clicked the same square twice
@@ -422,7 +431,11 @@ def drawEndGameOverlay(screen, gs):
     screen.blit(overlay, (0, 0))
 
     # Determine result text
-    if gs.checkmate:
+    if gameTerminated:
+        result = "Game Terminated"
+        sub = ""
+        title_color = p.Color(255, 160, 60)
+    elif gs.checkmate:
         result = "Checkmate!"
         if gs.whiteToMove:
             sub = "Black wins"
@@ -1041,8 +1054,8 @@ def getAIMove(gs, elo):
 def resetGame():
     """Reset all game state for a new game (used by Play Again)."""
     global gameStarted, aiThinking, aiThoughtText, aiThinkingDepth, aiBestMoveFound
-    global aiMoveFound, sqSelected, playerClicks, pieceValidMoves, moveMade, validMoves
-    global endGameHover, KILLER_MOVES, HISTORY
+    global aiMoveFound, sqSelected, playerClicks, pieceValidMoves, moveMade, validMoves, gameTerminated
+    global endGameHover, KILLER_MOVES, HISTORY, gameTerminated
 
     gameStarted = False
     aiThinking = False
@@ -1055,6 +1068,7 @@ def resetGame():
     pieceValidMoves = []
     moveMade = False
     endGameHover = 0
+    gameTerminated = False
 
     # Reset search heuristics
     global KILLER_MOVES
