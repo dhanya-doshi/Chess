@@ -40,11 +40,112 @@ PIECE_VALUE = {
     'k': 20000  # king (large value to avoid trading king)
 }
 
+# Piece-Square Tables (PST) for positional evaluation
+# Based on chess programming principles - pieces are worth more on good squares
+# Values are in centipawns (same scale as PIECE_VALUE)
+# Format: [row][col] where row 0 = white's back rank (white's perspective)
+
+# Pawn PST - reward central control and advancement
+PAWN_PST = [
+    [0,  0,  0,  0,  0,  0,  0,  0],
+    [50, 50, 50, 50, 50, 50, 50, 50],
+    [10, 10, 20, 30, 30, 20, 10, 10],
+    [5,  5, 10, 25, 25, 10,  5,  5],
+    [0,  0,  0, 20, 20,  0,  0,  0],
+    [5, -5,-10,  0,  0,-10, -5,  5],
+    [5, 10, 10,-20,-20, 10, 10,  5],
+    [0,  0,  0,  0,  0,  0,  0,  0]
+]
+
+# Knight PST - reward central squares and penalize edges
+KNIGHT_PST = [
+    [-50,-40,-30,-30,-30,-30,-40,-50],
+    [-40,-20,  0,  0,  0,  0,-20,-40],
+    [-30,  0, 10, 15, 15, 10,  0,-30],
+    [-30,  5, 15, 20, 20, 15,  5,-30],
+    [-30,  0, 15, 20, 20, 15,  0,-30],
+    [-30,  5, 10, 15, 15, 10,  5,-30],
+    [-40,-20,  0,  5,  5,  0,-20,-40],
+    [-50,-40,-30,-30,-30,-30,-40,-50]
+]
+
+# Bishop PST - reward diagonals and central control
+BISHOP_PST = [
+    [-20,-10,-10,-10,-10,-10,-10,-20],
+    [-10,  0,  0,  0,  0,  0,  0,-10],
+    [-10,  0,  5, 10, 10,  5,  0,-10],
+    [-10,  5,  5, 10, 10,  5,  5,-10],
+    [-10,  0, 10, 10, 10, 10,  0,-10],
+    [-10, 10, 10, 10, 10, 10, 10,-10],
+    [-10,  5,  0,  0,  0,  0,  5,-10],
+    [-20,-10,-10,-10,-10,-10,-10,-20]
+]
+
+# Rook PST - reward open files and centralization
+ROOK_PST = [
+    [0,  0,  0,  0,  0,  0,  0,  0],
+    [5, 10, 10, 10, 10, 10, 10,  5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [0,  0,  0,  5,  5,  0,  0,  0]
+]
+
+# Queen PST - reward central control and threaten
+QUEEN_PST = [
+    [-20,-10,-10, -5, -5,-10,-10,-20],
+    [-10,  0,  0,  0,  0,  0,  0,-10],
+    [-10,  0,  5,  5,  5,  5,  0,-10],
+    [-5,  0,  5,  5,  5,  5,  0, -5],
+    [0,  0,  5,  5,  5,  5,  0, -5],
+    [-10,  5,  5,  5,  5,  5,  0,-10],
+    [-10,  0,  5,  0,  0,  0,  0,-10],
+    [-20,-10,-10, -5, -5,-10,-10,-20]
+]
+
+# King PST - reward safety in early game, centralization in endgame
+KING_PST = [
+    [-30,-40,-40,-50,-50,-40,-40,-30],
+    [-30,-40,-40,-50,-50,-40,-40,-30],
+    [-30,-40,-40,-50,-50,-40,-40,-30],
+    [-30,-40,-40,-50,-50,-40,-40,-30],
+    [-20,-30,-30,-40,-40,-30,-30,-20],
+    [-10,-20,-20,-20,-20,-20,-20,-10],
+    [20, 20,  0,  0,  0,  0, 20, 20],
+    [20, 30, 10,  0,  0, 10, 30, 20]
+]
+
+PIECE_PST = {
+    'P': PAWN_PST,
+    'N': KNIGHT_PST,
+    'B': BISHOP_PST,
+    'R': ROOK_PST,
+    'Q': QUEEN_PST,
+    'K': KING_PST
+}
+
+# Killer moves - moves that caused cutoffs at each depth (for move ordering)
+# Format: [depth][slot] - we track 2 killer moves per depth
+MAX_SEARCH_DEPTH = 12
+KILLER_MOVES = [[None, None] for _ in range(MAX_SEARCH_DEPTH)]
+
+# History table - scores for move ordering based on success
+# Format: history[color][from_square][to_square]
+HISTORY_SIZE = 64  # 8x8 board
+HISTORY = [[[0 for _ in range(HISTORY_SIZE)] for _ in range(HISTORY_SIZE)] for _ in range(2)]
+
+# Quiescence search parameters
+MAX_QUIESCENCE_DEPTH = 20  # Max depth for quiescence search
+STAND_PAT_THRESHOLD = 150  # Don't search captures ifeval is this much above beta
+
 # AI Thinking state
 aiThinking = False  # Is the AI currently thinking?
 aiThoughtText = ""  # Display what the AI is "thinking"
 aiThinkingDepth = 0  # Current search depth
 aiBestMoveFound = None  # Best move found so far (for iterative deepening)
+aiMoveFound = None  # Move computed by AI thread, consumed by main loop
 
 # UI state
 gameStarted = False
@@ -70,7 +171,7 @@ def loadImages():
 
 
 def main():
-    global sliderDragging
+    global sliderDragging, aiThinking, aiMoveFound
     p.init()
 
     screen = p.display.set_mode((WIDTH, HEIGHT))
@@ -84,6 +185,7 @@ def main():
     sqSelected = ()  # no square is selected, keep track of the last click of the user (tuple: (row, col))
     playerClicks = []  # keep track of player clicks (two tuples: [(6, 4), (4, 4)])
     pieceValidMoves = []  # valid moves for the currently selected piece
+    aiMoveFound = None  # Move found by AI thread
 
     loadImages()
 
@@ -93,6 +195,10 @@ def main():
             if event.type == p.QUIT:
                 running = False
             elif event.type == p.MOUSEBUTTONDOWN:
+                # Ignore board clicks while AI is thinking or game over
+                if aiThinking or (not (gs.checkmate or gs.stalemate or gs.draw)):
+                    continue
+
                 location = p.mouse.get_pos()  # (x, y) location of mouse
                 col = location[0] // SQ_SIZE
                 row = location[1] // SQ_SIZE
@@ -140,13 +246,28 @@ def main():
                 validMoves = gs.getValidMoves()
                 moveMade = False
 
-                # After human move, if game not over and it's AI's turn (black), make AI move
+                # After human move, if game not over and it's AI's turn (black), start AI thinking
                 if not (gs.checkmate or gs.stalemate or gs.draw) and not gs.whiteToMove:
-                    aimove = getAIMove(gs, selectedElo)
-                    if aimove:
-                        gs.makeMove(aimove)
-                        moveMade = True
-                        # After AI move, we need to update valid moves etc. Will be handled in next loop iteration
+                    # Start AI thinking in a separate thread
+                    def aiThreadFunc():
+                        global aiThinking, aiMoveFound, aiThoughtText
+                        aiThinking = True
+                        aiThoughtText = "Thinking..."
+                        move = getAIMove(gs, selectedElo)
+                        aiMoveFound = move
+                        aiThinking = False
+                        aiThoughtText = ""
+
+                    aiThinking = False
+                    aiMoveFound = None
+                    aiThread = threading.Thread(target=aiThreadFunc)
+                    aiThread.start()
+
+            # Process AI move when it's ready (while keeping UI responsive)
+            if aiMoveFound is not None and not aiThinking:
+                gs.makeMove(aiMoveFound)
+                moveMade = True
+                aiMoveFound = None
 
             drawGameState(screen, gs, sqSelected, pieceValidMoves)
         else:
@@ -349,16 +470,36 @@ def drawSidebar(screen, gs):
     else:
         p.draw.circle(screen, p.Color(96, 96, 96), (indicator_x, indicator_y), indicator_size)
 
+    # AI Thinking indicator
+    if aiThinking:
+        thinking_font = p.font.Font(None, 22)
+        # Animated dots
+        dot_count = (int(time.time() * 3) % 4)
+        dots = "." * dot_count
+        think_text = f"AI thinking{dots}"
+        think_surface = thinking_font.render(think_text, True, THINKING_COLOR)
+        screen.blit(think_surface, (BOARD_WIDTH + 20, 160))
+        if aiThoughtText:
+            sub_text = thinking_font.render(aiThoughtText, True, p.Color(180, 180, 180))
+            screen.blit(sub_text, (BOARD_WIDTH + 20, 182))
+        if aiBestMoveFound:
+            move_text = f"Move: {aiBestMoveFound.getChessNotation()}"
+            move_surface = thinking_font.render(move_text, True, THINKING_COLOR)
+            screen.blit(move_surface, (BOARD_WIDTH + 20, 204))
+        y_start = 230
+    else:
+        y_start = 170
+
     # Captured pieces section
     captured_font = p.font.Font(None, 24)
     captured_title = captured_font.render("Captured Pieces", True, TURN_TEXT_COLOR)
-    screen.blit(captured_title, (BOARD_WIDTH + 20, 170))
+    screen.blit(captured_title, (BOARD_WIDTH + 20, y_start))
 
     # Calculate captured pieces from move log
     white_captured, black_captured = getCapturedPieces(gs.moveLog)
 
     # White captured pieces (black pieces captured by white)
-    y_offset = 200
+    y_offset = y_start + 30
     if white_captured:
         white_label = captured_font.render("White captured:", True, TURN_TEXT_COLOR)
         screen.blit(white_label, (BOARD_WIDTH + 20, y_offset))
@@ -405,6 +546,21 @@ def getCapturedPieces(moveLog):
     return white_captured, black_captured
 
 
+def getPiecePositionalValue(piece, row, col):
+    """Get the positional value from piece-square table for a piece.
+    For white pieces, we look up directly; for black, we flip the row"""
+    if piece == "--":
+        return 0
+    pieceType = piece[1].upper()
+    if pieceType not in PIECE_PST:
+        return 0
+    pst = PIECE_PST[pieceType]
+    if piece[0] == 'w':
+        return pst[row][col]
+    else:
+        return pst[7 - row][col]  # flip row for black
+
+
 def evaluateBoard(gs):
     """Evaluate the board from white's perspective.
     Returns a positive score if white is ahead, negative if black is ahead.
@@ -421,7 +577,7 @@ def evaluateBoard(gs):
     if gs.stalemate or gs.draw:
         return 0
 
-    # Material count
+    # Material count + positional evaluation
     score = 0
     for row in range(DIMENSION):
         for col in range(DIMENSION):
@@ -429,55 +585,140 @@ def evaluateBoard(gs):
             if piece != "--":
                 color = piece[0]
                 pieceType = piece[1].lower()
+                # Material value
                 value = PIECE_VALUE[pieceType]
+                # Positional value from PST
+                posValue = getPiecePositionalValue(piece, row, col)
                 if color == 'w':
-                    score += value
+                    score += value + posValue
                 else:
-                    score -= value
+                    score -= value + posValue
     return score
 
 
-def orderMoves(gs, moves):
-    """Order moves to improve alpha-beta pruning: captures first, then checks, etc."""
+def orderMoves(gs, moves, depth=0, killerMoves=None, history=None):
+    """Order moves to improve alpha-beta pruning: captures first, then checks, etc.
+    Uses killer moves and history heuristic for better ordering."""
+    if killerMoves is None:
+        killerMoves = KILLER_MOVES
+    if history is None:
+        history = HISTORY
+
     def moveScore(move):
         score = 0
-        # Captures
+        colorIndex = 0 if gs.whiteToMove else 1
+
+        # Captures - sort by MVV-LVA (Most Valuable Victim - Least Valuable Attacker)
         if move.pieceCaptured != "--":
-            score += PIECE_VALUE[move.pieceCaptured[1].lower()] * 10
-        # Checks (simple: after making move, opponent in check?)
-        # We'll skip for simplicity; could add but costs extra move generation.
-        # Promotions
+            victim = PIECE_VALUE[move.pieceCaptured[1].lower()]
+            attacker = PIECE_VALUE[move.pieceMoved[1].lower()]
+            score += 10000 + victim * 10 - attacker  # MVV-LVA scoring
+        else:
+            # Non-capture moves
+            # Killer moves - moves that caused cutoffs at this depth
+            if depth < MAX_SEARCH_DEPTH:
+                for km in killerMoves[depth]:
+                    if km is not None and move == km:
+                        score += 800
+                        break
+
+            # History heuristic - successful moves get higher scores
+            fromSq = move.startRow * 8 + move.startCol
+            toSq = move.endRow * 8 + move.endCol
+            score += history[colorIndex][fromSq][toSq]
+
+        # Promotions - high priority
         if move.isPawnPromotion:
-            score += PIECE_VALUE['q'] * 5
+            score += PIECE_VALUE['q'] * 8  # Strong bonus for promotion
+
         return score
     return sorted(moves, key=moveScore, reverse=True)
 
 
-def minimax(gs, depth, alpha, beta, maximizingPlayer):
-    """Minimax with alpha-beta pruning.
+def quiescenceSearch(gs, alpha, beta, depth):
+    """Quiescence search - only search 'noisy' moves (captures, promotions) until position is quiet.
     Returns (bestScore, bestMove)"""
+    standPat = evaluateBoard(gs)
+
+    # Beta cutoff - if we're already too far ahead, don't search captures
+    if standPat >= beta:
+        return beta, None
+    if standPat > alpha:
+        alpha = standPat
+
+    if depth >= MAX_QUIESCENCE_DEPTH:
+        return standPat, None
+
+    # Get only capture moves (noise moves) for quiescence
+    moves = gs.getValidMoves()
+    captureMoves = [m for m in moves if m.pieceCaptured != "--" or m.isPawnPromotion]
+
+    if not captureMoves:
+        return standPat, None
+
+    # Sort captures by MVV-LVA for best ordering
+    captureMoves = sorted(captureMoves, key=lambda m: (
+        PIECE_VALUE[m.pieceCaptured[1].lower()] if m.pieceCaptured != "--" else 0
+    ), reverse=True)
+
+    bestMove = None
+    for move in captureMoves:
+        gs.makeMove(move)
+        score, _ = quiescenceSearch(gs, -beta, -alpha, depth + 1)
+        score = -score  # Flip sign for maximizing/minimizing
+        gs.undoMove()
+
+        if score >= beta:
+            return beta, None
+        if score > alpha:
+            alpha = score
+            bestMove = move
+
+    return alpha, bestMove
+
+
+def minimax(gs, depth, alpha, beta, maximizingPlayer, currentDepth=0):
+    """Minimax with alpha-beta pruning and killer move ordering.
+    Returns (bestScore, bestMove)"""
+    if currentDepth >= MAX_SEARCH_DEPTH:
+        depth = 0  # Force quiescence search at max depth
+
     # Terminal condition
     if depth == 0 or gs.checkmate or gs.stalemate or gs.draw:
+        if depth == 0:
+            # At zero depth in main search, do quiescence to get stable eval
+            return quiescenceSearch(gs, alpha, beta, 0)
         return evaluateBoard(gs), None
 
     legalMoves = gs.getValidMoves()
     if not legalMoves:
+        if depth == 0:
+            return quiescenceSearch(gs, alpha, beta, 0)
         return evaluateBoard(gs), None
 
-    orderedMoves = orderMoves(gs, legalMoves)
+    orderedMoves = orderMoves(gs, legalMoves, currentDepth, KILLER_MOVES, HISTORY)
 
     if maximizingPlayer:
         maxEval = -math.inf
         bestMove = None
         for move in orderedMoves:
             gs.makeMove(move)
-            eval, _ = minimax(gs, depth - 1, alpha, beta, False)
+            eval_score, _ = minimax(gs, depth - 1, alpha, beta, False, currentDepth + 1)
             gs.undoMove()
-            if eval > maxEval:
-                maxEval = eval
+            if eval_score > maxEval:
+                maxEval = eval_score
                 bestMove = move
-            alpha = max(alpha, eval)
+            alpha = max(alpha, eval_score)
             if beta <= alpha:
+                # Killer move: store this move for move ordering at other nodes
+                if move not in KILLER_MOVES[currentDepth]:
+                    # Shift existing killers and add this one
+                    KILLER_MOVES[currentDepth][1] = KILLER_MOVES[currentDepth][0]
+                    KILLER_MOVES[currentDepth][0] = move
+                # History: record successful move for white
+                fromSq = move.startRow * 8 + move.startCol
+                toSq = move.endRow * 8 + move.endCol
+                HISTORY[0][fromSq][toSq] += depth * depth
                 break
         return maxEval, bestMove
     else:
@@ -485,41 +726,92 @@ def minimax(gs, depth, alpha, beta, maximizingPlayer):
         bestMove = None
         for move in orderedMoves:
             gs.makeMove(move)
-            eval, _ = minimax(gs, depth - 1, alpha, beta, True)
+            eval_score, _ = minimax(gs, depth - 1, alpha, beta, True, currentDepth + 1)
             gs.undoMove()
-            if eval < minEval:
-                minEval = eval
+            if eval_score < minEval:
+                minEval = eval_score
                 bestMove = move
-            beta = min(beta, eval)
+            beta = min(beta, eval_score)
             if beta <= alpha:
+                # Killer move
+                if move not in KILLER_MOVES[currentDepth]:
+                    KILLER_MOVES[currentDepth][1] = KILLER_MOVES[currentDepth][0]
+                    KILLER_MOVES[currentDepth][0] = move
+                # History: record successful move for black
+                fromSq = move.startRow * 8 + move.startCol
+                toSq = move.endRow * 8 + move.endCol
+                HISTORY[1][fromSq][toSq] += depth * depth
                 break
         return minEval, bestMove
 
 
+def iterativeDeepening(gs, maxDepth, callback):
+    """Iterative deepening search that calls callback after each depth completes.
+    callback(depth, bestMove, score) is called to update UI with progress.
+    Returns the best move found at the deepest depth."""
+    bestMove = None
+    for depth in range(1, maxDepth + 1):
+        _, bestMove = minimax(gs, depth, -math.inf, math.inf, gs.whiteToMove)
+        if bestMove is not None:
+            callback(depth, bestMove)
+        # Small delay between depths to allow UI updates
+        time.sleep(0.05)
+    return bestMove
+
+
 def getAIMove(gs, elo):
-    """Determine AI move based on Elo rating.
-    Returns a Move object."""
-    # Map Elo to search depth
+    """Determine AI move based on Elo rating with iterative deepening.
+    Returns a Move object. Updates global thinking state for UI."""
+    global aiThinking, aiThoughtText, aiThinkingDepth, aiBestMoveFound
+
+    # Map Elo to max search depth
     if elo <= 900:
-        depth = 1
+        maxDepth = 2
     elif elo <= 1100:
-        depth = 2
+        maxDepth = 3
     elif elo <= 1300:
-        depth = 3
+        maxDepth = 4
     elif elo <= 1500:
-        depth = 4
+        maxDepth = 5
     else:
-        depth = 5  # cap at reasonable depth for performance
+        maxDepth = 6  # cap at reasonable depth
 
-    # Get best move from minimax: white tries to maximize, black to minimize
-    # (evaluation is from white's perspective)
-    _, bestMove = minimax(gs, depth, -math.inf, math.inf, gs.whiteToMove)
+    # Minimum thinking time in seconds based on Elo (weaker = thinks less)
+    minThinkTime = max(0.5, (elo - 800) / 400)  # 0.5s at 800 Elo, 3s at 2000 Elo
 
-    # If no best move (should not happen), pick random
-    if bestMove is None:
-        legalMoves = gs.getValidMoves()
-        if legalMoves:
-            bestMove = random.choice(legalMoves)
+    thinkStart = time.time()
+
+    def updateCallback(depth, move):
+        """Called after each depth completes with current best move"""
+        global aiThoughtText, aiThinkingDepth, aiBestMoveFound
+        aiThinkingDepth = depth
+        aiBestMoveFound = move
+        if move:
+            eval_score = evaluateBoard(gs)
+            # Translating evaluation to a more human description
+            if abs(eval_score) > 15000:
+                quality = "Checkmate in " + str(abs(int((15000 - abs(eval_score)) / 100)))
+            elif eval_score > 300:
+                quality = "Winning"
+            elif eval_score > 50:
+                quality = "Slight advantage"
+            elif eval_score > -50:
+                quality = "Equal"
+            elif eval_score > -300:
+                quality = "Slight disadvantage"
+            else:
+                quality = "Losing"
+            aiThoughtText = f"Depth {depth}: {quality}"
+
+    # Run iterative deepening
+    aiThinking = True
+    aiThoughtText = "Starting search..."
+    bestMove = iterativeDeepening(gs, maxDepth, updateCallback)
+
+    # Ensure minimum thinking time
+    elapsed = time.time() - thinkStart
+    if elapsed < minThinkTime:
+        time.sleep(minThinkTime - elapsed)
 
     # Apply randomness based on Elo to simulate weaker play
     # Lower Elo -> higher chance to play a random move instead of best
@@ -529,7 +821,19 @@ def getAIMove(gs, elo):
         if random.random() < randProb:
             legalMoves = gs.getValidMoves()
             if legalMoves:
+                aiThoughtText = "Hmm, let me think again..."
+                time.sleep(0.3)
+                aiThinking = False
                 return random.choice(legalMoves)
+
+    aiThinking = False
+    aiThoughtText = ""
+
+    # If no best move (should not happen), pick random
+    if bestMove is None:
+        legalMoves = gs.getValidMoves()
+        if legalMoves:
+            bestMove = random.choice(legalMoves)
 
     return bestMove
 
