@@ -222,8 +222,8 @@ class GameState:
                 elif move.endCol == 7:
                     self.currentCastlingRights.bks = False
 
-    def getValidMoves(self):
-        """All moves considering checks"""
+    def getValidMoves(self, skipDrawChecks=False):
+        """All moves considering checks. Pass skipDrawChecks=True for AI search to skip expensive draw evaluation."""
         tempEnpassantPossible = self.enpassantPossible
         tempEnpassantPossibleLog = self.enpassantPossibleLog[:]
         tempCastlingRights = CastlingRights(self.currentCastlingRights.wks, self.currentCastlingRights.wqs,
@@ -257,8 +257,9 @@ class GameState:
             self.checkmate = False
             self.stalemate = False
 
-        # Check for draw conditions after move generation
-        self._checkDrawConditions()
+        # Only check for draw conditions when explicitly requested (root-level only)
+        if not skipDrawChecks:
+            self._checkDrawConditions()
 
         return moves
 

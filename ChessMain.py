@@ -140,18 +140,24 @@ HISTORY = [[[0 for _ in range(HISTORY_SIZE)] for _ in range(HISTORY_SIZE)] for _
 MAX_QUIESCENCE_DEPTH = 20  # Max depth for quiescence search
 STAND_PAT_THRESHOLD = 150  # Don't search captures ifeval is this much above beta
 
+# Search timeout (seconds) - hard cap to prevent hangs at high depths
+SEARCH_TIMEOUT = 5.0
+
 # AI Thinking state
 aiThinking = False  # Is the AI currently thinking?
 aiThoughtText = ""  # Display what the AI is "thinking"
 aiThinkingDepth = 0  # Current search depth
 aiBestMoveFound = None  # Best move found so far (for iterative deepening)
 aiMoveFound = None  # Move computed by AI thread, consumed by main loop
+searchStartTime = 0.0  # When the current search began
 
 # UI state
 gameStarted = False
 selectedElo = 1200  # default Elo
 hoveringButton = False
 sliderDragging = False
+# End-game screen hover state: 0=none, 1=playAgain, 2=quit
+endGameHover = 0
 
 def loadImages():
     pieces = [
@@ -202,6 +208,10 @@ def main():
                 if not gameStarted:
                     # Handle config UI clicks
                     handleConfigClick(location)
+                elif gameStarted and (gs.checkmate or gs.stalemate or gs.draw):
+                    # Handle end-game screen button clicks
+                    if handleEndGameClick(location):
+                        running = False
                 else:
                     # Ignore board clicks while AI is thinking or game over
                     if aiThinking or gs.checkmate or gs.stalemate or gs.draw:
@@ -233,9 +243,13 @@ def main():
                             playerClicks = [sqSelected]  # if user clicked on an invalid square, just keep the first click
                             # Keep pieceValidMoves for the selected square
 
-            elif event.type == p.MOUSEMOTION and not gameStarted:
-                # Update button hover state
-                updateButtonHover(p.mouse.get_pos())
+            elif event.type == p.MOUSEMOTION:
+                if not gameStarted:
+                    # Update config button hover state
+                    updateButtonHover(p.mouse.get_pos())
+                elif gameStarted and (gs.checkmate or gs.stalemate or gs.draw):
+                    # Update end-game button hover state
+                    updateEndGameHover(p.mouse.get_pos())
             elif event.type == p.MOUSEBUTTONUP and sliderDragging:
                 sliderDragging = False
 
@@ -269,6 +283,9 @@ def main():
                 aiMoveFound = None
 
             drawGameState(screen, gs, sqSelected, pieceValidMoves)
+            # Draw game-over overlay when game ends
+            if gameStarted and (gs.checkmate or gs.stalemate or gs.draw):
+                drawEndGameOverlay(screen, gs)
         else:
             drawConfigScreen(screen)
 
@@ -318,6 +335,125 @@ def updateSliderFromPos(x):
     # Map position to Elo range 800-2000
     ratio = (x - sliderMinX) / (sliderMaxX - sliderMinX)
     selectedElo = int(800 + ratio * (2000 - 800))
+
+
+def updateEndGameHover(pos):
+    """Update endGameHover based on mouse position.
+    0=none, 1=playAgain, 2=quit"""
+    global endGameHover
+    x, y = pos
+    # Button layout: two buttons side by side near bottom-center of board
+    btn_w, btn_h = 130, 45
+    btn_y = HEIGHT // 2 + 80
+    gap = 20
+    btn1_x = WIDTH // 2 - btn_w - gap // 2
+    btn2_x = WIDTH // 2 + gap // 2
+
+    r1 = p.Rect(btn1_x, btn_y, btn_w, btn_h)
+    r2 = p.Rect(btn2_x, btn_y, btn_w, btn_h)
+
+    if r1.collidepoint(x, y):
+        endGameHover = 1
+    elif r2.collidepoint(x, y):
+        endGameHover = 2
+    else:
+        endGameHover = 0
+
+
+def handleEndGameClick(pos):
+    """Handle clicks on the end-game overlay. Returns True if Quit was pressed."""
+    global endGameHover
+    x, y = pos
+    btn_w, btn_h = 130, 45
+    btn_y = HEIGHT // 2 + 80
+    gap = 20
+    btn1_x = WIDTH // 2 - btn_w - gap // 2
+    btn2_x = WIDTH // 2 + gap // 2
+
+    r1 = p.Rect(btn1_x, btn_y, btn_w, btn_h)
+    r2 = p.Rect(btn2_x, btn_y, btn_w, btn_h)
+
+    if r1.collidepoint(x, y):
+        resetGame()
+    elif r2.collidepoint(x, y):
+        return True  # Quit
+    return False
+
+
+def drawEndGameOverlay(screen, gs):
+    """Draw a semi-transparent overlay with game result and buttons."""
+    # Darken background
+    overlay = p.Surface((WIDTH, HEIGHT), p.SRCALPHA)
+    overlay.fill((0, 0, 0, 160))
+    screen.blit(overlay, (0, 0))
+
+    # Determine result text
+    if gs.checkmate:
+        result = "Checkmate!"
+        if gs.whiteToMove:
+            sub = "Black wins"
+            sub_color = p.Color(200, 200, 200)
+        else:
+            sub = "White wins"
+            sub_color = p.Color(255, 255, 255)
+        title_color = p.Color(255, 80, 80)
+    elif gs.draw:
+        if gs.drawFiftyMove:
+            result = "Draw!"
+            sub = "50-move rule"
+        elif gs.drawThreefold:
+            result = "Draw!"
+            sub = "Threefold repetition"
+        elif gs.drawInsufficient:
+            result = "Draw!"
+            sub = "Insufficient material"
+        else:
+            result = "Draw!"
+            sub = ""
+        title_color = p.Color(200, 200, 100)
+        sub_color = p.Color(160, 160, 160)
+    else:  # stalemate
+        result = "Stalemate!"
+        sub = "Draw"
+        title_color = p.Color(200, 200, 100)
+        sub_color = p.Color(160, 160, 160)
+
+    # Title - result
+    font_large = p.font.Font(None, 72)
+    result_surface = font_large.render(result, True, title_color)
+    screen.blit(result_surface, (WIDTH // 2 - result_surface.get_width() // 2,
+                                  HEIGHT // 2 - 80))
+
+    # Subtitle
+    if sub:
+        font_sub = p.font.Font(None, 32)
+        sub_surface = font_sub.render(sub, True, sub_color)
+        screen.blit(sub_surface, (WIDTH // 2 - sub_surface.get_width() // 2,
+                                   HEIGHT // 2 - 30))
+
+    # Buttons
+    btn_w, btn_h = 130, 45
+    btn_y = HEIGHT // 2 + 80
+    gap = 20
+    btn1_x = WIDTH // 2 - btn_w - gap // 2
+    btn2_x = WIDTH // 2 + gap // 2
+
+    # Play Again button
+    r1 = p.Rect(btn1_x, btn_y, btn_w, btn_h)
+    color1 = BUTTON_HOVER_COLOR if endGameHover == 1 else BUTTON_COLOR
+    p.draw.rect(screen, color1, r1, border_radius=8)
+    font_btn = p.font.Font(None, 26)
+    play_text = font_btn.render("Play Again", True, BUTTON_TEXT_COLOR)
+    screen.blit(play_text, (r1.centerx - play_text.get_width() // 2,
+                            r1.centery - play_text.get_height() // 2))
+
+    # Quit button
+    r2 = p.Rect(btn2_x, btn_y, btn_w, btn_h)
+    color2 = p.Color(180, 60, 60) if endGameHover == 2 else p.Color(140, 50, 50)
+    p.draw.rect(screen, color2, r2, border_radius=8)
+    quit_text = font_btn.render("Quit", True, BUTTON_TEXT_COLOR)
+    screen.blit(quit_text, (r2.centerx - quit_text.get_width() // 2,
+                            r2.centery - quit_text.get_height() // 2))
 
 
 def drawConfigScreen(screen):
@@ -637,6 +773,10 @@ def orderMoves(gs, moves, depth=0, killerMoves=None, history=None):
 def quiescenceSearch(gs, alpha, beta, depth):
     """Quiescence search - only search 'noisy' moves (captures, promotions) until position is quiet.
     Returns (bestScore, bestMove)"""
+    # Timeout check - use elapsed time from global searchStartTime
+    if SEARCH_TIMEOUT > 0 and (time.time() - searchStartTime) >= SEARCH_TIMEOUT:
+        return evaluateBoard(gs), None
+
     standPat = evaluateBoard(gs)
 
     # Beta cutoff - if we're already too far ahead, don't search captures
@@ -649,7 +789,8 @@ def quiescenceSearch(gs, alpha, beta, depth):
         return standPat, None
 
     # Get only capture moves (noise moves) for quiescence
-    moves = gs.getValidMoves()
+    # Use skipDrawChecks=True for performance during deep search
+    moves = gs.getValidMoves(skipDrawChecks=True)
     captureMoves = [m for m in moves if m.pieceCaptured != "--" or m.isPawnPromotion]
 
     if not captureMoves:
@@ -679,8 +820,13 @@ def quiescenceSearch(gs, alpha, beta, depth):
 def minimax(gs, depth, alpha, beta, maximizingPlayer, currentDepth=0):
     """Minimax with alpha-beta pruning and killer move ordering.
     Returns (bestScore, bestMove)"""
+    # Timeout check - hard stop to prevent hangs
+    if SEARCH_TIMEOUT > 0 and (time.time() - searchStartTime) >= SEARCH_TIMEOUT:
+        return evaluateBoard(gs), None
+
+    # Hard depth cap: stop trying to go deeper
     if currentDepth >= MAX_SEARCH_DEPTH:
-        depth = 0  # Force quiescence search at max depth
+        return evaluateBoard(gs), None
 
     # Terminal condition
     if depth == 0 or gs.checkmate or gs.stalemate or gs.draw:
@@ -689,7 +835,8 @@ def minimax(gs, depth, alpha, beta, maximizingPlayer, currentDepth=0):
             return quiescenceSearch(gs, alpha, beta, 0)
         return evaluateBoard(gs), None
 
-    legalMoves = gs.getValidMoves()
+    # Use skipDrawChecks=True during search for performance
+    legalMoves = gs.getValidMoves(skipDrawChecks=True)
     if not legalMoves:
         if depth == 0:
             return quiescenceSearch(gs, alpha, beta, 0)
@@ -748,8 +895,12 @@ def iterativeDeepening(gs, maxDepth, callback):
     """Iterative deepening search that calls callback after each depth completes.
     callback(depth, bestMove, score) is called to update UI with progress.
     Returns the best move found at the deepest depth."""
+    global searchStartTime
     bestMove = None
     for depth in range(1, maxDepth + 1):
+        # Check timeout before each new depth
+        if SEARCH_TIMEOUT > 0 and (time.time() - searchStartTime) >= SEARCH_TIMEOUT:
+            break
         _, bestMove = minimax(gs, depth, -math.inf, math.inf, gs.whiteToMove)
         if bestMove is not None:
             callback(depth, bestMove)
@@ -761,7 +912,7 @@ def iterativeDeepening(gs, maxDepth, callback):
 def getAIMove(gs, elo):
     """Determine AI move based on Elo rating with iterative deepening.
     Returns a Move object. Updates global thinking state for UI."""
-    global aiThinking, aiThoughtText, aiThinkingDepth, aiBestMoveFound
+    global aiThinking, aiThoughtText, aiThinkingDepth, aiBestMoveFound, searchStartTime
 
     # Map Elo to max search depth
     if elo <= 900:
@@ -803,6 +954,7 @@ def getAIMove(gs, elo):
             aiThoughtText = f"Depth {depth}: {quality}"
 
     # Run iterative deepening
+    searchStartTime = time.time()
     aiThinking = True
     aiThoughtText = "Starting search..."
     bestMove = iterativeDeepening(gs, maxDepth, updateCallback)
@@ -835,6 +987,31 @@ def getAIMove(gs, elo):
             bestMove = random.choice(legalMoves)
 
     return bestMove
+
+
+def resetGame():
+    """Reset all game state for a new game (used by Play Again)."""
+    global gameStarted, aiThinking, aiThoughtText, aiThinkingDepth, aiBestMoveFound
+    global aiMoveFound, sqSelected, playerClicks, pieceValidMoves, moveMade, validMoves
+    global endGameHover, KILLER_MOVES, HISTORY
+
+    gameStarted = False
+    aiThinking = False
+    aiThoughtText = ""
+    aiThinkingDepth = 0
+    aiBestMoveFound = None
+    aiMoveFound = None
+    sqSelected = ()
+    playerClicks = []
+    pieceValidMoves = []
+    moveMade = False
+    endGameHover = 0
+
+    # Reset search heuristics
+    global KILLER_MOVES
+    KILLER_MOVES = [[None, None] for _ in range(MAX_SEARCH_DEPTH)]
+    global HISTORY
+    HISTORY = [[[0 for _ in range(HISTORY_SIZE)] for _ in range(HISTORY_SIZE)] for _ in range(2)]
 
 
 if __name__ == "__main__":
