@@ -195,10 +195,6 @@ def main():
             if event.type == p.QUIT:
                 running = False
             elif event.type == p.MOUSEBUTTONDOWN:
-                # Ignore board clicks while AI is thinking or game over
-                if aiThinking or (not (gs.checkmate or gs.stalemate or gs.draw)):
-                    continue
-
                 location = p.mouse.get_pos()  # (x, y) location of mouse
                 col = location[0] // SQ_SIZE
                 row = location[1] // SQ_SIZE
@@ -207,6 +203,9 @@ def main():
                     # Handle config UI clicks
                     handleConfigClick(location)
                 else:
+                    # Ignore board clicks while AI is thinking or game over
+                    if aiThinking or gs.checkmate or gs.stalemate or gs.draw:
+                        continue
                     # Ignore clicks outside the board (in sidebar area)
                     if col >= DIMENSION:
                         continue
