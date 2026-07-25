@@ -156,6 +156,7 @@ gameStarted = False
 selectedElo = 1200  # default Elo
 hoveringButton = False
 sliderDragging = False
+sidebarQuitHover = False  # hover state for sidebar quit button
 # End-game screen hover state: 0=none, 1=playAgain, 2=quit
 endGameHover = 0
 
@@ -216,8 +217,10 @@ def main():
                     # Ignore board clicks while AI is thinking or game over
                     if aiThinking or gs.checkmate or gs.stalemate or gs.draw:
                         continue
-                    # Ignore clicks outside the board (in sidebar area)
+                    # Handle clicks in sidebar area
                     if col >= DIMENSION:
+                        if handleSidebarQuitClick(location):
+                            running = False
                         continue
 
                     if sqSelected == (row, col):  # the user clicked the same square twice
@@ -250,6 +253,9 @@ def main():
                 elif gameStarted and (gs.checkmate or gs.stalemate or gs.draw):
                     # Update end-game button hover state
                     updateEndGameHover(p.mouse.get_pos())
+                elif gameStarted:
+                    # Update sidebar quit button hover
+                    updateSidebarQuitHover(p.mouse.get_pos())
             elif event.type == p.MOUSEBUTTONUP and sliderDragging:
                 sliderDragging = False
 
@@ -377,6 +383,34 @@ def handleEndGameClick(pos):
         resetGame()
     elif r2.collidepoint(x, y):
         return True  # Quit
+    return False
+
+
+def updateSidebarQuitHover(pos):
+    """Update sidebarQuitHover flag based on mouse position."""
+    global sidebarQuitHover
+    x, y = pos
+    if x >= BOARD_WIDTH:
+        btn_w = SIDEBAR_WIDTH - 40
+        btn_h = 36
+        btn_x = BOARD_WIDTH + 20
+        btn_y = HEIGHT - btn_h - 20
+        sidebarQuitHover = p.Rect(btn_x, btn_y, btn_w, btn_h).collidepoint(x, y)
+    else:
+        sidebarQuitHover = False
+
+
+def handleSidebarQuitClick(pos):
+    """Handle clicks in the sidebar area. Returns True if Quit was pressed."""
+    x, y = pos
+    if x < BOARD_WIDTH:
+        return False
+    btn_w = SIDEBAR_WIDTH - 40
+    btn_h = 36
+    btn_x = BOARD_WIDTH + 20
+    btn_y = HEIGHT - btn_h - 20
+    if p.Rect(btn_x, btn_y, btn_w, btn_h).collidepoint(x, y):
+        return True
     return False
 
 
@@ -663,6 +697,21 @@ def drawSidebar(screen, gs):
     else:
         no_captured = captured_font.render("None", True, TURN_TEXT_COLOR)
         screen.blit(no_captured, (BOARD_WIDTH + 20, y_offset))
+
+    # Quit button at the bottom of the sidebar
+    btn_w = SIDEBAR_WIDTH - 40
+    btn_h = 36
+    btn_x = BOARD_WIDTH + 20
+    btn_y = HEIGHT - btn_h - 20
+    quit_rect = p.Rect(btn_x, btn_y, btn_w, btn_h)
+    quit_color = p.Color(140, 50, 50) if sidebarQuitHover else p.Color(100, 40, 40)
+    p.draw.rect(screen, quit_color, quit_rect, border_radius=6)
+    p.draw.rect(screen, p.Color(180, 80, 80) if sidebarQuitHover else p.Color(120, 60, 60),
+                quit_rect, width=1, border_radius=6)
+    font_quit = p.font.Font(None, 22)
+    quit_text = font_quit.render("Quit", True, BUTTON_TEXT_COLOR)
+    screen.blit(quit_text, (quit_rect.centerx - quit_text.get_width() // 2,
+                            quit_rect.centery - quit_text.get_height() // 2))
 
 
 def getCapturedPieces(moveLog):
