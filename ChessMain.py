@@ -152,9 +152,11 @@ aiMoveFound = None  # Move computed by AI thread, consumed by main loop
 searchStartTime = 0.0  # When the current search began
 gameState = None  # Current GameState object (made global so resetGame can swap it)
 
-# UI state
-gameStarted = False
+# App screen state: "home" | "config" | "game"
+appScreen = "home"  # Which screen to show
+gameMode = None     # "ai" or "local" — set when entering game from config/home
 selectedElo = 1200  # default Elo
+homeHoverButton = 0  # which home button is hovered: 0=none, 1=vsAI, 2=local
 hoveringButton = False
 sliderDragging = False
 sidebarQuitHover = False  # hover state for sidebar quit button
@@ -208,14 +210,15 @@ def main():
                 col = location[0] // SQ_SIZE
                 row = location[1] // SQ_SIZE
 
-                if not gameStarted:
-                    # Handle config UI clicks
+                if appScreen == "home":
+                    handleHomeClick(location, running)
+                elif appScreen == "config":
                     handleConfigClick(location)
-                elif gameStarted and (gameState.checkmate or gameState.stalemate or gameState.draw):
+                elif appScreen == "game" and (gameState.checkmate or gameState.stalemate or gameState.draw):
                     # Handle end-game screen button clicks
                     if handleEndGameClick(location):
                         running = False
-                else:
+                elif appScreen == "game":
                     # Ignore board clicks while AI is thinking or game over
                     if aiThinking or gameState.checkmate or gameState.stalemate or gameState.draw:
                         continue
@@ -257,26 +260,31 @@ def main():
                             # Keep pieceValidMoves for the selected square
 
             elif event.type == p.MOUSEMOTION:
-                if not gameStarted:
-                    # Update config button hover state
+                if appScreen == "home":
+                    updateHomeHover(p.mouse.get_pos())
+                elif appScreen == "config":
                     updateButtonHover(p.mouse.get_pos())
-                elif gameStarted and (gameState.checkmate or gameState.stalemate or gameState.draw):
+                elif gameState and (gameState.checkmate or gameState.stalemate or gameState.draw):
                     # Update end-game button hover state
                     updateEndGameHover(p.mouse.get_pos())
-                elif gameStarted:
+                elif appScreen == "game":
                     # Update sidebar quit button hover
                     updateSidebarQuitHover(p.mouse.get_pos())
             elif event.type == p.MOUSEBUTTONUP and sliderDragging:
                 sliderDragging = False
 
-        if gameStarted:
+        if appScreen == "home":
+            drawHomeScreen(screen)
+        elif appScreen == "config":
+            drawConfigScreen(screen)
+        elif appScreen == "game":
             # update the valid moves list if a move was made
             if moveMade:
                 validMoves = gameState.getValidMoves()
                 moveMade = False
 
-                # After human move, if game not over and it's AI's turn (black), start AI thinking
-                if not (gameState.checkmate or gameState.stalemate or gameState.draw) and not gameState.whiteToMove:
+                # Trigger AI move only in vs-AI mode
+                if gameMode == "ai" and not (gameState.checkmate or gameState.stalemate or gameState.draw) and not gameState.whiteToMove:
                     # Start AI thinking in a separate thread
                     def aiThreadFunc(gs):
                         global aiThinking, aiMoveFound, aiThoughtText
@@ -300,10 +308,8 @@ def main():
 
             drawGameState(screen, gameState, sqSelected, pieceValidMoves)
             # Draw game-over overlay when game ends
-            if gameStarted and (gameState.checkmate or gameState.stalemate or gameState.draw):
+            if gameState.checkmate or gameState.stalemate or gameState.draw:
                 drawEndGameOverlay(screen, gameState)
-        else:
-            drawConfigScreen(screen)
 
         clock.tick(MAX_FPS)
         p.display.flip()
@@ -313,17 +319,24 @@ def main():
 
 def handleConfigClick(pos):
     """Handle mouse clicks in configuration mode"""
-    global selectedElo, sliderDragging, gameStarted, hoveringButton
+    global selectedElo, sliderDragging, hoveringButton
     x, y = pos
+
+    # Back button (top of config panel)
+    backRect = p.Rect(WIDTH // 2 - 200, HEIGHT // 2 - 95, 80, 30)
+    if backRect.collidepoint(x, y):
+        global appScreen
+        appScreen = "home"
+        return
 
     # Start button area
     buttonRect = p.Rect(WIDTH // 2 - 60, HEIGHT // 2 + 80, 120, 40)
     if buttonRect.collidepoint(x, y):
-        gameStarted = True
+        startGame()
         return
 
     # Slider area
-    sliderRect = p.Rect(WIDTH // 2 - 150, HEIGHT // 2, 300, 20)
+    sliderRect = p.Rect(WIDTH // 2 - 150, HEIGHT // 2 + 10, 300, 20)
     if sliderRect.collidepoint(x, y):
         sliderDragging = True
         updateSliderFromPos(x)
@@ -336,6 +349,80 @@ def updateButtonHover(pos):
     x, y = pos
     buttonRect = p.Rect(WIDTH // 2 - 60, HEIGHT // 2 + 80, 120, 40)
     hoveringButton = buttonRect.collidepoint(x, y)
+
+
+def updateHomeHover(pos):
+    """Update homeHoverButton flag based on mouse position.
+    0=none, 1=vsAI, 2=local"""
+    global homeHoverButton
+    x, y = pos
+    btn_w, btn_h = 200, 50
+    panel_w = 440
+    panel_x = WIDTH // 2 - panel_w // 2
+    panel_y = HEIGHT // 2 - 60
+    # vs AI button
+    r1 = p.Rect(WIDTH // 2 - btn_w, panel_y + 80, btn_w, btn_h)
+    # Local button
+    r2 = p.Rect(WIDTH // 2, panel_y + 80, btn_w, btn_h)
+    if r1.collidepoint(x, y):
+        homeHoverButton = 1
+    elif r2.collidepoint(x, y):
+        homeHoverButton = 2
+    else:
+        homeHoverButton = 0
+
+
+def handleHomeClick(pos, running):
+    """Handle clicks on the home screen."""
+    global appScreen, gameMode, gameState, validMoves
+    x, y = pos
+    btn_w, btn_h = 200, 50
+    panel_w = 440
+    panel_x = WIDTH // 2 - panel_w // 2
+    panel_y = HEIGHT // 2 - 60
+
+    # vs AI button
+    r1 = p.Rect(WIDTH // 2 - btn_w, panel_y + 80, btn_w, btn_h)
+    # Local 2-Player button
+    r2 = p.Rect(WIDTH // 2, panel_y + 80, btn_w, btn_h)
+
+    if r1.collidepoint(x, y):
+        gameMode = "ai"
+        appScreen = "config"
+    elif r2.collidepoint(x, y):
+        gameMode = "local"
+        # Start local game immediately — no Elo config needed
+        _startGame()
+    # clicking anywhere else on home (not on buttons) does nothing
+
+
+def startGame():
+    """Initialize a fresh game and transition to the game screen."""
+    _startGame()
+
+
+def _startGame():
+    """Internal: actually reset and start the game state."""
+    global gameState, validMoves, sqSelected, playerClicks, pieceValidMoves, moveMade
+    global aiThinking, aiMoveFound, aiThoughtText, aiThinkingDepth, aiBestMoveFound
+    global KILLER_MOVES, HISTORY, appScreen
+
+    gameState = ChessEngine.GameState()
+    validMoves = gameState.getValidMoves()
+    sqSelected = ()
+    playerClicks = []
+    pieceValidMoves = []
+    moveMade = False
+    aiThinking = False
+    aiMoveFound = None
+    aiThoughtText = ""
+    aiThinkingDepth = 0
+    aiBestMoveFound = None
+    KILLER_MOVES = [[None, None] for _ in range(MAX_SEARCH_DEPTH)]
+    HISTORY = [[[0 for _ in range(HISTORY_SIZE)] for _ in range(HISTORY_SIZE)] for _ in range(2)]
+
+    global appScreen
+    appScreen = "game"
 
 
 def updateSliderFromPos(x):
@@ -516,6 +603,14 @@ def drawConfigScreen(screen):
     p.draw.rect(screen, CONFIG_BG_COLOR, panelRect, border_radius=10)
     p.draw.rect(screen, CONFIG_HIGHLIGHT_COLOR, panelRect, width=2, border_radius=10)
 
+    # Back button (top of config panel)
+    backRect = p.Rect(WIDTH // 2 - 200, HEIGHT // 2 - 95, 80, 30)
+    p.draw.rect(screen, p.Color(60, 60, 60), backRect, border_radius=4)
+    fontBack = p.font.Font(None, 20)
+    backText = fontBack.render("< Back", True, CONFIG_TEXT_COLOR)
+    screen.blit(backText, (backRect.centerx - backText.get_width() // 2,
+                           backRect.centery - backText.get_height() // 2))
+
     # Title
     fontTitle = p.font.Font(None, 48)
     title = fontTitle.render("Chess Engine", True, CONFIG_TEXT_COLOR)
@@ -540,14 +635,62 @@ def drawConfigScreen(screen):
     handleY = HEIGHT // 2 + 15  # center of track
     p.draw.circle(screen, CONFIG_HIGHLIGHT_COLOR, (handleX, handleY), handleRadius)
 
-    # Start button
+    # Play button
     buttonRect = p.Rect(WIDTH // 2 - 60, HEIGHT // 2 + 80, 120, 40)
     buttonColor = BUTTON_HOVER_COLOR if hoveringButton else BUTTON_COLOR
     p.draw.rect(screen, buttonColor, buttonRect, border_radius=5)
     fontButton = p.font.Font(None, 28)
-    buttonText = fontButton.render("Start", True, BUTTON_TEXT_COLOR)
-    screen.blit(buttonText, (buttonRect.centerx - buttonText.get_width() // 2,
-                             buttonRect.centery - buttonText.get_height() // 2))
+    playText = fontButton.render("Play", True, BUTTON_TEXT_COLOR)
+    screen.blit(playText, (buttonRect.centerx - playText.get_width() // 2,
+                           buttonRect.centery - playText.get_height() // 2))
+
+
+def drawHomeScreen(screen):
+    """Draw the home screen with two game-mode buttons."""
+    # Darken background
+    overlay = p.Surface((WIDTH, HEIGHT), p.SRCALPHA)
+    overlay.fill((0, 0, 0, 180))
+    screen.blit(overlay, (0, 0))
+
+    # Home panel
+    panel_w, panel_h = 440, 220
+    panel_x = WIDTH // 2 - panel_w // 2
+    panel_y = HEIGHT // 2 - panel_h // 2
+    panelRect = p.Rect(panel_x, panel_y, panel_w, panel_h)
+    p.draw.rect(screen, CONFIG_BG_COLOR, panelRect, border_radius=10)
+    p.draw.rect(screen, CONFIG_HIGHLIGHT_COLOR, panelRect, width=2, border_radius=10)
+
+    # Title
+    fontTitle = p.font.Font(None, 52)
+    title = fontTitle.render("Chess", True, CONFIG_TEXT_COLOR)
+    screen.blit(title, (WIDTH // 2 - title.get_width() // 2, panel_y + 20))
+
+    # Subtitle
+    fontSub = p.font.Font(None, 22)
+    sub = fontSub.render("Choose a game mode", True, p.Color(160, 160, 160))
+    screen.blit(sub, (WIDTH // 2 - sub.get_width() // 2, panel_y + 70))
+
+    # Two buttons side by side
+    btn_w, btn_h = 200, 50
+    btn_y = panel_y + 110
+    gap = 20
+
+    # vs AI button (left)
+    r1 = p.Rect(WIDTH // 2 - btn_w - gap // 2, btn_y, btn_w, btn_h)
+    color1 = BUTTON_HOVER_COLOR if homeHoverButton == 1 else BUTTON_COLOR
+    p.draw.rect(screen, color1, r1, border_radius=6)
+    fontBtn = p.font.Font(None, 24)
+    ai_text = fontBtn.render("Play vs AI", True, BUTTON_TEXT_COLOR)
+    screen.blit(ai_text, (r1.centerx - ai_text.get_width() // 2,
+                           r1.centery - ai_text.get_height() // 2))
+
+    # Local 2-Player button (right)
+    r2 = p.Rect(WIDTH // 2 + gap // 2, btn_y, btn_w, btn_h)
+    color2 = BUTTON_HOVER_COLOR if homeHoverButton == 2 else BUTTON_COLOR
+    p.draw.rect(screen, color2, r2, border_radius=6)
+    local_text = fontBtn.render("Local 2-Player", True, BUTTON_TEXT_COLOR)
+    screen.blit(local_text, (r2.centerx - local_text.get_width() // 2,
+                             r2.centery - local_text.get_height() // 2))
 
 
 def getPieceValidMoves(gs, row, col):
@@ -1053,12 +1196,14 @@ def getAIMove(gs, elo):
 
 
 def resetGame():
-    """Reset all game state for a new game (used by Play Again)."""
-    global gameStarted, aiThinking, aiThoughtText, aiThinkingDepth, aiBestMoveFound
-    global aiMoveFound, sqSelected, playerClicks, pieceValidMoves, moveMade, validMoves, gameTerminated
-    global endGameHover, KILLER_MOVES, HISTORY, gameState
+    """Reset all game state and return to home screen (used by Play Again)."""
+    global aiThinking, aiThoughtText, aiThinkingDepth, aiBestMoveFound
+    global aiMoveFound, sqSelected, playerClicks, pieceValidMoves, moveMade, gameTerminated
+    global endGameHover, KILLER_MOVES, HISTORY, gameState, appScreen, gameMode
 
-    gameStarted = False
+    global appScreen
+    appScreen = "home"
+    gameMode = None
     aiThinking = False
     aiThoughtText = ""
     aiThinkingDepth = 0
@@ -1077,10 +1222,9 @@ def resetGame():
     global HISTORY
     HISTORY = [[[0 for _ in range(HISTORY_SIZE)] for _ in range(HISTORY_SIZE)] for _ in range(2)]
 
-    # Replace gameState with a fresh GameState so all stale flags are cleared
+    # Discard stale gameState (only needed when appScreen is "game")
     global gameState
-    gameState = ChessEngine.GameState()
-    validMoves = gameState.getValidMoves()
+    gameState = None
 
 
 if __name__ == "__main__":
