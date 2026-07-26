@@ -150,6 +150,7 @@ aiThinkingDepth = 0  # Current search depth
 aiBestMoveFound = None  # Best move found so far (for iterative deepening)
 aiMoveFound = None  # Move computed by AI thread, consumed by main loop
 searchStartTime = 0.0  # When the current search began
+gameState = None  # Current GameState object (made global so resetGame can swap it)
 
 # UI state
 gameStarted = False
@@ -179,7 +180,7 @@ def loadImages():
 
 
 def main():
-    global sliderDragging, aiThinking, aiMoveFound
+    global sliderDragging, aiThinking, aiMoveFound, gameState
     p.init()
 
     screen = p.display.set_mode((WIDTH, HEIGHT))
@@ -187,8 +188,8 @@ def main():
 
     clock = p.time.Clock()
 
-    gs = ChessEngine.GameState()
-    validMoves = gs.getValidMoves()
+    gameState = ChessEngine.GameState()
+    validMoves = gameState.getValidMoves()
     moveMade = False  # flag variable for when a move is made
     sqSelected = ()  # no square is selected, keep track of the last click of the user (tuple: (row, col))
     playerClicks = []  # keep track of player clicks (two tuples: [(6, 4), (4, 4)])
@@ -210,13 +211,13 @@ def main():
                 if not gameStarted:
                     # Handle config UI clicks
                     handleConfigClick(location)
-                elif gameStarted and (gs.checkmate or gs.stalemate or gs.draw):
+                elif gameStarted and (gameState.checkmate or gameState.stalemate or gameState.draw):
                     # Handle end-game screen button clicks
                     if handleEndGameClick(location):
                         running = False
                 else:
                     # Ignore board clicks while AI is thinking or game over
-                    if aiThinking or gs.checkmate or gs.stalemate or gs.draw:
+                    if aiThinking or gameState.checkmate or gameState.stalemate or gameState.draw:
                         continue
                     # Handle clicks in sidebar area
                     if col >= DIMENSION:
@@ -224,12 +225,12 @@ def main():
                         if handleSidebarQuitClick(location):
                             global gameTerminated
                             gameTerminated = True
-                            gs.checkmate = False
-                            gs.stalemate = False
-                            gs.draw = True
-                            gs.drawThreefold = False
-                            gs.drawFiftyMove = False
-                            gs.drawInsufficient = False
+                            gameState.checkmate = False
+                            gameState.stalemate = False
+                            gameState.draw = True
+                            gameState.drawThreefold = False
+                            gameState.drawFiftyMove = False
+                            gameState.drawInsufficient = False
                         continue
 
                     if sqSelected == (row, col):  # the user clicked the same square twice
@@ -240,13 +241,13 @@ def main():
                         sqSelected = (row, col)
                         playerClicks.append(sqSelected)  # append for both 1st and 2nd click
                         # Get valid moves for the selected piece
-                        pieceValidMoves = getPieceValidMoves(gs, row, col)
+                        pieceValidMoves = getPieceValidMoves(gameState, row, col)
 
                     if len(playerClicks) == 2:  # after 2nd click
-                        move = ChessEngine.Move(playerClicks[0], playerClicks[1], gs.board)
+                        move = ChessEngine.Move(playerClicks[0], playerClicks[1], gameState.board)
                         for i in range(len(validMoves)):
                             if move == validMoves[i]:
-                                gs.makeMove(validMoves[i])
+                                gameState.makeMove(validMoves[i])
                                 moveMade = True
                                 sqSelected = ()  # reset user clicks
                                 playerClicks = []
@@ -259,7 +260,7 @@ def main():
                 if not gameStarted:
                     # Update config button hover state
                     updateButtonHover(p.mouse.get_pos())
-                elif gameStarted and (gs.checkmate or gs.stalemate or gs.draw):
+                elif gameStarted and (gameState.checkmate or gameState.stalemate or gameState.draw):
                     # Update end-game button hover state
                     updateEndGameHover(p.mouse.get_pos())
                 elif gameStarted:
@@ -271,13 +272,13 @@ def main():
         if gameStarted:
             # update the valid moves list if a move was made
             if moveMade:
-                validMoves = gs.getValidMoves()
+                validMoves = gameState.getValidMoves()
                 moveMade = False
 
                 # After human move, if game not over and it's AI's turn (black), start AI thinking
-                if not (gs.checkmate or gs.stalemate or gs.draw) and not gs.whiteToMove:
+                if not (gameState.checkmate or gameState.stalemate or gameState.draw) and not gameState.whiteToMove:
                     # Start AI thinking in a separate thread
-                    def aiThreadFunc():
+                    def aiThreadFunc(gs):
                         global aiThinking, aiMoveFound, aiThoughtText
                         aiThinking = True
                         aiThoughtText = "Thinking..."
@@ -288,19 +289,19 @@ def main():
 
                     aiThinking = False
                     aiMoveFound = None
-                    aiThread = threading.Thread(target=aiThreadFunc)
+                    aiThread = threading.Thread(target=lambda: aiThreadFunc(gameState))
                     aiThread.start()
 
             # Process AI move when it's ready (while keeping UI responsive)
             if aiMoveFound is not None and not aiThinking:
-                gs.makeMove(aiMoveFound)
+                gameState.makeMove(aiMoveFound)
                 moveMade = True
                 aiMoveFound = None
 
-            drawGameState(screen, gs, sqSelected, pieceValidMoves)
+            drawGameState(screen, gameState, sqSelected, pieceValidMoves)
             # Draw game-over overlay when game ends
-            if gameStarted and (gs.checkmate or gs.stalemate or gs.draw):
-                drawEndGameOverlay(screen, gs)
+            if gameStarted and (gameState.checkmate or gameState.stalemate or gameState.draw):
+                drawEndGameOverlay(screen, gameState)
         else:
             drawConfigScreen(screen)
 
@@ -1055,7 +1056,7 @@ def resetGame():
     """Reset all game state for a new game (used by Play Again)."""
     global gameStarted, aiThinking, aiThoughtText, aiThinkingDepth, aiBestMoveFound
     global aiMoveFound, sqSelected, playerClicks, pieceValidMoves, moveMade, validMoves, gameTerminated
-    global endGameHover, KILLER_MOVES, HISTORY, gameTerminated
+    global endGameHover, KILLER_MOVES, HISTORY, gameState
 
     gameStarted = False
     aiThinking = False
@@ -1075,6 +1076,11 @@ def resetGame():
     KILLER_MOVES = [[None, None] for _ in range(MAX_SEARCH_DEPTH)]
     global HISTORY
     HISTORY = [[[0 for _ in range(HISTORY_SIZE)] for _ in range(HISTORY_SIZE)] for _ in range(2)]
+
+    # Replace gameState with a fresh GameState so all stale flags are cleared
+    global gameState
+    gameState = ChessEngine.GameState()
+    validMoves = gameState.getValidMoves()
 
 
 if __name__ == "__main__":
